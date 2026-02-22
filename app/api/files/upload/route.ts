@@ -93,12 +93,22 @@ export async function POST(request: NextRequest) {
       textContent,
       createdAt: new Date(),
     });
-    return NextResponse.json({
+    const response: {
+      id: string;
+      filename: string;
+      mimeType: string | undefined;
+      createdAt: string;
+      textContent?: string;
+    } = {
       id,
       filename,
       mimeType: file.type,
       createdAt: new Date().toISOString(),
-    });
+    };
+    if (textContent != null && textContent !== "") {
+      response.textContent = textContent;
+    }
+    return NextResponse.json(response);
   } catch (e) {
     console.error("Upload error:", e);
     return NextResponse.json(

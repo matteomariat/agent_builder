@@ -24,3 +24,25 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* TipTap working doc placeholder */
+.ProseMirror.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #71717a;
+  pointer-events: none;
+  height: 0;
+}
+.dark .ProseMirror.is-editor-empty:first-child::before {
+  color: #a1a1aa;
+}
+.ProseMirror p.is-empty:only-child::before {
+  content: attr(data-placeholder);
+  color: #71717a;
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+.dark .ProseMirror p.is-empty:only-child::before {
+  color: #a1a1aa;
+}

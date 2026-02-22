@@ -2,26 +2,116 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { runUserAgent } from "./run-user-agent";
 import { appendOrReplaceDoc } from "@/lib/db/doc";
+import { getMemoriesForMasterAgent, addMemory } from "@/lib/db/master-agent-memories";
+import { getAssignedFileIdsForMaster } from "@/lib/db/file-assignments";
 import { db } from "@/lib/db";
-import { files } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { files, agents } from "@/lib/db/schema";
+import { eq, and, inArray } from "drizzle-orm";
 import { getDefaultUserId } from "@/lib/db/users";
+import { createMasterAgent, createSubagent } from "./create-agent";
+import { log } from "@/lib/logger";
 
-export function createMasterTools(conversationId: string) {
+function withToolLog<T>(
+  toolName: string,
+  conversationId: string,
+  argsSummary: Record<string, unknown>,
+  fn: () => Promise<T>
+): Promise<T> {
+  const toolLog = log.child({ toolName, conversationId });
+  toolLog.info("tool.execute_start", argsSummary);
+  const startMs = Date.now();
+  return fn().then(
+    (out) => {
+      toolLog.info("tool.execute_finish", { durationMs: Date.now() - startMs });
+      return out;
+    },
+    (err) => {
+      toolLog.warn("tool.execute_error", {
+        durationMs: Date.now() - startMs,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  );
+}
+
+export function createMasterTools(conversationId: string, masterAgentId: string | null) {
   return {
+    create_agent: tool({
+      description:
+        "Create a new master agent or subagent. Use subagent for specialists the master can invoke via invoke_agent; use master for another coordinator.",
+      inputSchema: zodSchema(
+        z.object({
+          type: z.enum(["master", "subagent"]).describe("Whether to create a master agent or a subagent"),
+          name: z.string().describe("Display name for the agent"),
+          systemPrompt: z.string().describe("System prompt that defines the agent's behavior"),
+          model: z.string().optional().describe("Optional model override"),
+          maxSteps: z.number().min(1).max(100).optional().describe("Max steps (subagent 1-50, master 1-100)"),
+          thinkingEnabled: z.boolean().optional().describe("Enable extended thinking"),
+          toolIds: z.array(z.string()).optional().describe("IDs of tools to assign to the agent"),
+          knowledge: z.string().optional().describe("Optional knowledge text (subagent only)"),
+        })
+      ),
+      execute: async ({ type, name, systemPrompt, model, maxSteps, thinkingEnabled, toolIds, knowledge }) =>
+        withToolLog(
+          "create_agent",
+          conversationId,
+          { type, name },
+          async () => {
+            const userId = getDefaultUserId();
+            try {
+              if (type === "master") {
+                const created = await createMasterAgent(userId, {
+                  name,
+                  systemPrompt,
+                  model: model ?? null,
+                  maxSteps: maxSteps ?? null,
+                  thinkingEnabled: thinkingEnabled ?? undefined,
+                  toolIds,
+                });
+                return { id: created.id, name: created.name, type: "master" as const };
+              }
+              const created = await createSubagent(userId, {
+                name,
+                systemPrompt,
+                model: model ?? null,
+                knowledge: knowledge ?? null,
+                maxSteps: maxSteps ?? null,
+                thinkingEnabled: thinkingEnabled ?? undefined,
+                toolIds,
+              });
+              return { id: created.id, name: created.name, type: "subagent" as const };
+            } catch (e) {
+              const message = e instanceof Error ? e.message : "Failed to create agent";
+              return { error: message };
+            }
+          }
+        ),
+    }),
     invoke_agent: tool({
       description:
-        "Delegate a task to a user-created agent by ID. Use this when you need a specialist (e.g. researcher, writer) to handle part of the work. Pass the agent ID and the message to send.",
+        "Delegate a task to a user-created agent by ID. Use when the user's question or task matches this agent's expertise; pass the exact agent ID from the list and a self-contained message for that specialist.",
       inputSchema: zodSchema(
         z.object({
           agentId: z.string().describe("The ID of the user-created agent to invoke"),
           message: z.string().describe("The message or task to send to the agent"),
+          context: z.string().optional().describe("Optional context for the sub-agent (e.g. user's original question or a doc excerpt)"),
         })
       ),
-      execute: async ({ agentId, message }) => {
-        const result = await runUserAgent(agentId, message);
-        return { result };
-      },
+      execute: async ({ agentId, message, context }) =>
+        withToolLog("invoke_agent", conversationId, { agentId, messageLength: message.length, hasContext: Boolean(context) }, async () => {
+          const out = await runUserAgent(agentId, message, context);
+          const agentRow = await db.query.agents.findFirst({
+            where: and(eq(agents.id, agentId), eq(agents.userId, getDefaultUserId())),
+            columns: { name: true },
+          });
+          return {
+            result: out.result,
+            agentName: agentRow?.name ?? undefined,
+            ...(out.summary != null && { summary: out.summary }),
+            ...(out.detail != null && { detail: out.detail }),
+          };
+        }),
     }),
     write_to_doc: tool({
       description:
@@ -32,14 +122,15 @@ export function createMasterTools(conversationId: string) {
           content: z.string().describe("The text to append or the full doc content"),
         })
       ),
-      execute: async ({ mode, content }) => {
-        const out = await appendOrReplaceDoc(conversationId, mode, content, true);
-        if (out === null) return { error: "Working doc not found" };
-        if ("conflict" in out && out.conflict) {
-          return { error: "Doc is being edited by the user. Try again later." };
-        }
-        return { ok: true, message: mode === "append" ? "Appended to doc." : "Doc replaced." };
-      },
+      execute: async ({ mode, content }) =>
+        withToolLog("write_to_doc", conversationId, { mode }, async () => {
+          const out = await appendOrReplaceDoc(conversationId, mode, content, true);
+          if (out === null) return { error: "Working doc not found" };
+          if ("conflict" in out && out.conflict) {
+            return { error: "Doc is being edited by the user. Try again later." };
+          }
+          return { ok: true, message: mode === "append" ? "Appended to doc." : "Doc replaced." };
+        }),
     }),
     research: tool({
       description:
@@ -49,38 +140,91 @@ export function createMasterTools(conversationId: string) {
           query: z.string().optional().describe("Optional search/summary query; if omitted, list all file summaries"),
         })
       ),
-      execute: async ({ query }) => {
-        const userId = getDefaultUserId();
-        const list = await db.query.files.findMany({
-          where: eq(files.userId, userId),
-          columns: { id: true, filename: true, textContent: true },
-        });
-        if (list.length === 0) {
-          return { files: [], message: "No uploaded files." };
-        }
-        const summaries = list.map((f) => ({
-          id: f.id,
-          filename: f.filename,
-          preview: f.textContent
-            ? f.textContent.slice(0, 2000) + (f.textContent.length > 2000 ? "…" : "")
-            : "(no text extracted)",
-        }));
-        if (!query) {
-          return { files: summaries, message: "List of uploaded files and their text preview." };
-        }
-        const lower = query.toLowerCase();
-        const relevant = list.filter(
-          (f) =>
-            f.filename.toLowerCase().includes(lower) ||
-            (f.textContent?.toLowerCase().includes(lower) ?? false)
-        );
-        const results = relevant.map((f) => ({
-          id: f.id,
-          filename: f.filename,
-          content: f.textContent?.slice(0, 8000) ?? "(no text)",
-        }));
-        return { query, results, message: `Found ${results.length} relevant file(s).` };
-      },
+      execute: async ({ query }) =>
+        withToolLog("research", conversationId, { hasQuery: !!query }, async () => {
+          const userId = getDefaultUserId();
+          const assignedFileIds =
+            masterAgentId
+              ? await getAssignedFileIdsForMaster(masterAgentId)
+              : [];
+          const list = await db.query.files.findMany({
+            where:
+              assignedFileIds.length > 0
+                ? and(eq(files.userId, userId), inArray(files.id, assignedFileIds))
+                : eq(files.userId, userId),
+            columns: { id: true, filename: true, textContent: true },
+          });
+          if (list.length === 0) {
+            return {
+              files: [],
+              message:
+                assignedFileIds.length > 0
+                  ? "No files assigned to this master agent."
+                  : "No uploaded files.",
+            };
+          }
+          const summaries = list.map((f) => ({
+            id: f.id,
+            filename: f.filename,
+            preview: f.textContent
+              ? f.textContent.slice(0, 2000) + (f.textContent.length > 2000 ? "…" : "")
+              : "(no text extracted)",
+          }));
+          if (!query) {
+            return { files: summaries, message: "List of uploaded files and their text preview." };
+          }
+          const lower = query.toLowerCase();
+          const relevant = list.filter(
+            (f) =>
+              f.filename.toLowerCase().includes(lower) ||
+              (f.textContent?.toLowerCase().includes(lower) ?? false)
+          );
+          const results = relevant.map((f) => ({
+            id: f.id,
+            filename: f.filename,
+            content: f.textContent?.slice(0, 8000) ?? "(no text)",
+          }));
+          return { query, results, message: `Found ${results.length} relevant file(s).` };
+        }),
+    }),
+    remember: tool({
+      description:
+        "Store a fact or piece of information in long-term memory for use in future conversations. Use for user preferences, important decisions, or context that should persist across chats.",
+      inputSchema: zodSchema(
+        z.object({
+          content: z.string().describe("The fact or information to remember"),
+        })
+      ),
+      execute: async ({ content }) =>
+        withToolLog("remember", conversationId, { contentLength: content.length }, async () => {
+          const { id } = await addMemory(masterAgentId, content);
+          return { ok: true, id, message: "Stored in long-term memory." };
+        }),
+    }),
+    recall: tool({
+      description:
+        "Retrieve recent long-term memories. Optionally pass a query to filter by keyword (simple text match). Use when you need to look up something previously remembered.",
+      inputSchema: zodSchema(
+        z.object({
+          query: z.string().optional().describe("Optional keyword(s) to filter memories; if omitted, returns recent memories"),
+        })
+      ),
+      execute: async ({ query }) =>
+        withToolLog("recall", conversationId, { hasQuery: !!(query?.trim()) }, async () => {
+          const memories = await getMemoriesForMasterAgent(masterAgentId, { limit: 20 });
+          if (memories.length === 0) {
+            return { memories: [], message: "No long-term memories found." };
+          }
+          let filtered = memories;
+          if (query && query.trim()) {
+            const lower = query.toLowerCase().trim();
+            filtered = memories.filter((m) => m.content.toLowerCase().includes(lower));
+          }
+          return {
+            memories: filtered.map((m) => ({ id: m.id, content: m.content, createdAt: m.createdAt.toISOString() })),
+            message: `Found ${filtered.length} memory(ies).`,
+          };
+        }),
     }),
   };
 }
@@ -90,4 +234,6 @@ export const MASTER_SYSTEM_PROMPT = `You are the Master agent. You coordinate wo
 2. Writing to the shared working doc via write_to_doc (append or replace). Only write when the user is not editing.
 3. Using the research tool to search/summarize the user's uploaded files.
 
-Always be helpful and concise. When you delegate to another agent, summarize their result for the user. When you write to the doc, use clear structure (headings, lists).`;
+Always be helpful and concise. When you delegate to another agent, use their result as follows:
+- If the sub-agent returns a structured list (e.g. SERP results with Position, Title, URL, Description in markdown), present that list in full to the user. Prefer writing it to the working doc via write_to_doc and then briefly tell the user it's in the doc, or paste the full list in your reply. Do not replace a formatted list with a short summary.
+- For other sub-agent results (narrative, short answers), summarize for the user or use the working doc for long content. When a sub-agent returns summary and detail, you may use summary for a brief reply and detail for the full answer.`;
