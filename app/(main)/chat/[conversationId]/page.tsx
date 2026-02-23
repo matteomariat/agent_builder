@@ -66,6 +66,8 @@ const markdownComponents: Parameters<typeof ReactMarkdown>[0]["components"] = {
 
 type DocState = {
   content: string;
+  undoStack: string[];
+  redoStack: string[];
   lockHolder: "user" | "agent" | null;
   updatedAt: string | null;
 };
@@ -95,7 +97,12 @@ const DEFAULT_PROJECT_TITLE = "New conversation";
 export default function ChatPage() {
   const params = useParams();
   const conversationId = params?.conversationId as string;
-  const [doc, setDoc] = useState<DocState>({ content: "", lockHolder: null, updatedAt: null });
+  const [doc, setDoc] = useState<DocState>({ content: "", undoStack: [], redoStack: [], lockHolder: null, updatedAt: null });
+  const [docsList, setDocsList] = useState<{ id: string; title: string; updatedAt: string | null }[]>([]);
+  const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
+  const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const [editingDocTitle, setEditingDocTitle] = useState("");
+  const renameDocInputRef = useRef<HTMLInputElement>(null);
   const [docLoading, setDocLoading] = useState(true);
   const [initialMessagesLoaded, setInitialMessagesLoaded] = useState(false);
   const [projectTitle, setProjectTitle] = useState(DEFAULT_PROJECT_TITLE);
@@ -110,6 +117,7 @@ export default function ChatPage() {
   const docDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const wasLoadingRef = useRef(false);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setLeftPaneWidth(getStoredLeftPaneWidth());
@@ -150,14 +158,24 @@ export default function ChatPage() {
   );
 
   useEffect(() => {
+    if (messages.length === 0 && !initialMessagesLoaded) return;
+    const id = requestAnimationFrame(() => {
+      chatBottomRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [messages, initialMessagesLoaded]);
+
+  useEffect(() => {
     if (!conversationId) return;
     (async () => {
       try {
-        const [msgRes, docRes, convRes] = await Promise.all([
+        const [msgRes, docRes, docsRes, convRes] = await Promise.all([
           fetch(`/api/conversations/${conversationId}/messages`),
           fetch(`/api/conversations/${conversationId}/doc`),
+          fetch(`/api/conversations/${conversationId}/docs`),
           fetch(`/api/conversations/${conversationId}`),
         ]);
+        let docData: { id: string; content?: string; undoStack?: string[]; redoStack?: string[]; lockHolder?: string | null; updatedAt?: string | null } | null = null;
         if (msgRes.ok) {
           const msgData = await msgRes.json();
           setMessages(
@@ -170,12 +188,28 @@ export default function ChatPage() {
         }
         setInitialMessagesLoaded(true);
         if (docRes.ok) {
-          const docData = await docRes.json();
+          docData = await docRes.json();
           setDoc({
             content: docData.content ?? "",
+            undoStack: Array.isArray(docData.undoStack) ? docData.undoStack : [],
+            redoStack: Array.isArray(docData.redoStack) ? docData.redoStack : [],
             lockHolder: docData.lockHolder ?? null,
             updatedAt: docData.updatedAt ?? null,
           });
+        }
+        if (docsRes.ok) {
+          const { docs } = await docsRes.json();
+          const list = Array.isArray(docs) ? docs : [];
+          if (list.length > 0) {
+            setDocsList(list);
+            setSelectedDocId(list[0].id);
+          } else if (docData) {
+            setDocsList([{ id: docData.id, title: "Doc", updatedAt: docData.updatedAt ?? null }]);
+            setSelectedDocId(docData.id);
+          }
+        } else if (docData) {
+          setDocsList([{ id: docData.id, title: "Doc", updatedAt: docData.updatedAt ?? null }]);
+          setSelectedDocId(docData.id);
         }
         if (convRes.ok) {
           const convData = await convRes.json();
@@ -192,12 +226,17 @@ export default function ChatPage() {
 
   const refetchDoc = useCallback(async () => {
     if (!conversationId) return;
+    const url = selectedDocId
+      ? `/api/conversations/${conversationId}/docs/${selectedDocId}`
+      : `/api/conversations/${conversationId}/doc`;
     try {
-      const res = await fetch(`/api/conversations/${conversationId}/doc`);
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         setDoc({
           content: data.content ?? "",
+          undoStack: Array.isArray(data.undoStack) ? data.undoStack : [],
+          redoStack: Array.isArray(data.redoStack) ? data.redoStack : [],
           lockHolder: data.lockHolder ?? null,
           updatedAt: data.updatedAt ?? null,
         });
@@ -205,7 +244,7 @@ export default function ChatPage() {
     } catch {
       // ignore
     }
-  }, [conversationId]);
+  }, [conversationId, selectedDocId]);
 
   useEffect(() => {
     if (!isLoading && doc.lockHolder === "agent") {
@@ -216,23 +255,46 @@ export default function ChatPage() {
   useEffect(() => {
     if (wasLoadingRef.current && !isLoading) {
       refetchDoc();
+      if (conversationId) {
+        fetch(`/api/conversations/${conversationId}/docs`)
+          .then((r) => r.ok && r.json())
+          .then((data) => {
+            const list = Array.isArray(data?.docs) ? data.docs : [];
+            if (list.length > 0) {
+              setDocsList(list);
+              setSelectedDocId((prev) => (prev && list.some((x: { id: string }) => x.id === prev) ? prev : list[0].id));
+            }
+          })
+          .catch(() => {});
+      }
     }
     wasLoadingRef.current = isLoading;
-  }, [isLoading, refetchDoc]);
+  }, [isLoading, conversationId, refetchDoc]);
 
   const handleDocChange = useCallback(
     (value: string) => {
       setDoc((d) => ({ ...d, content: value }));
       if (docDebounceRef.current) clearTimeout(docDebounceRef.current);
+      const url = selectedDocId
+        ? `/api/conversations/${conversationId}/docs/${selectedDocId}`
+        : `/api/conversations/${conversationId}/doc`;
       docDebounceRef.current = setTimeout(async () => {
         if (!conversationId) return;
         try {
-          const res = await fetch(`/api/conversations/${conversationId}/doc`, {
+          const res = await fetch(url, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ content: value }),
           });
-          if (res.status === 409) {
+          if (res.ok) {
+            const data = await res.json();
+            setDoc((d) => ({
+              ...d,
+              undoStack: Array.isArray(data.undoStack) ? data.undoStack : d.undoStack,
+              redoStack: Array.isArray(data.redoStack) ? data.redoStack : d.redoStack,
+              updatedAt: data.updatedAt ?? d.updatedAt,
+            }));
+          } else if (res.status === 409) {
             const data = await res.json().catch(() => ({}));
             console.warn(data.error ?? "Doc locked");
           }
@@ -243,11 +305,219 @@ export default function ChatPage() {
         }
       }, DEBOUNCE_MS);
     },
-    [conversationId]
+    [conversationId, selectedDocId]
   );
 
   const agentEditing = doc.lockHolder === "agent" || isLoading;
   const docReadOnly = agentEditing;
+  const stuckLocked = doc.lockHolder === "agent" && !isLoading;
+
+  const handleTakeControl = useCallback(async () => {
+    if (!conversationId) return;
+    const url = selectedDocId
+      ? `/api/conversations/${conversationId}/docs/${selectedDocId}`
+      : `/api/conversations/${conversationId}/doc`;
+    try {
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lockHolder: null }),
+      });
+      if (res.ok) {
+        setDoc((d) => ({ ...d, lockHolder: null }));
+      }
+    } catch {
+      // ignore
+    }
+  }, [conversationId, selectedDocId]);
+
+  const handlePersistedUndo = useCallback(async () => {
+    if (doc.undoStack.length === 0 || !conversationId || docReadOnly) return;
+    const prevContent = doc.undoStack[0];
+    const newUndo = doc.undoStack.slice(1);
+    const newRedo = [doc.content, ...doc.redoStack].slice(0, 30);
+    const url = selectedDocId ? `/api/conversations/${conversationId}/docs/${selectedDocId}` : `/api/conversations/${conversationId}/doc`;
+    try {
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: prevContent,
+          undoStack: newUndo,
+          redoStack: newRedo,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDoc((d) => ({
+          ...d,
+          content: data.content ?? prevContent,
+          undoStack: Array.isArray(data.undoStack) ? data.undoStack : newUndo,
+          redoStack: Array.isArray(data.redoStack) ? data.redoStack : newRedo,
+          updatedAt: data.updatedAt ?? null,
+        }));
+      }
+    } catch {
+      // ignore
+    }
+  }, [conversationId, selectedDocId, doc.content, doc.undoStack, doc.redoStack, docReadOnly]);
+
+  const handlePersistedRedo = useCallback(async () => {
+    if (doc.redoStack.length === 0 || !conversationId || docReadOnly) return;
+    const nextContent = doc.redoStack[0];
+    const newRedo = doc.redoStack.slice(1);
+    const newUndo = [doc.content, ...doc.undoStack].slice(0, 30);
+    const url = selectedDocId ? `/api/conversations/${conversationId}/docs/${selectedDocId}` : `/api/conversations/${conversationId}/doc`;
+    try {
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: nextContent,
+          undoStack: newUndo,
+          redoStack: newRedo,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDoc((d) => ({
+          ...d,
+          content: data.content ?? nextContent,
+          undoStack: Array.isArray(data.undoStack) ? data.undoStack : newUndo,
+          redoStack: Array.isArray(data.redoStack) ? data.redoStack : newRedo,
+          updatedAt: data.updatedAt ?? null,
+        }));
+      }
+    } catch {
+      // ignore
+    }
+  }, [conversationId, selectedDocId, doc.content, doc.undoStack, doc.redoStack, docReadOnly]);
+
+  const switchDoc = useCallback(
+    async (docId: string) => {
+      if (docId === selectedDocId || !conversationId) return;
+      if (docDebounceRef.current) {
+        clearTimeout(docDebounceRef.current);
+        docDebounceRef.current = null;
+      }
+      setDocLoading(true);
+      try {
+        const res = await fetch(`/api/conversations/${conversationId}/docs/${docId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setDoc({
+            content: data.content ?? "",
+            undoStack: Array.isArray(data.undoStack) ? data.undoStack : [],
+            redoStack: Array.isArray(data.redoStack) ? data.redoStack : [],
+            lockHolder: data.lockHolder ?? null,
+            updatedAt: data.updatedAt ?? null,
+          });
+          setSelectedDocId(docId);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setDocLoading(false);
+      }
+    },
+    [conversationId, selectedDocId]
+  );
+
+  const handleNewDoc = useCallback(async () => {
+    if (!conversationId) return;
+    if (docDebounceRef.current) {
+      clearTimeout(docDebounceRef.current);
+      docDebounceRef.current = null;
+    }
+    try {
+      const res = await fetch(`/api/conversations/${conversationId}/docs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Doc" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDocsList((prev) => [...prev, { id: data.id, title: data.title ?? "Doc", updatedAt: data.updatedAt ?? null }]);
+        setSelectedDocId(data.id);
+        setDoc({ content: "", undoStack: [], redoStack: [], lockHolder: null, updatedAt: data.updatedAt ?? null });
+      }
+    } catch {
+      // ignore
+    }
+  }, [conversationId]);
+
+  const startRenameDoc = useCallback((d: { id: string; title: string }) => {
+    setEditingDocId(d.id);
+    setEditingDocTitle(d.title);
+  }, []);
+
+  const saveRenameDoc = useCallback(
+    async (docId: string) => {
+      const title = editingDocTitle.trim() || "Doc";
+      setEditingDocId(null);
+      try {
+        const res = await fetch(`/api/conversations/${conversationId}/docs/${docId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title }),
+        });
+        if (res.ok) {
+          setDocsList((prev) => prev.map((x) => (x.id === docId ? { ...x, title } : x)));
+        }
+      } catch {
+        // ignore
+      }
+    },
+    [conversationId, editingDocTitle]
+  );
+
+  const cancelRenameDoc = useCallback(() => {
+    setEditingDocId(null);
+    setEditingDocTitle("");
+  }, []);
+
+  const handleDeleteDoc = useCallback(
+    async (docId: string) => {
+      if (!conversationId || docsList.length <= 1) return;
+      if (!confirm("Delete this doc? This cannot be undone.")) return;
+      try {
+        const res = await fetch(`/api/conversations/${conversationId}/docs/${docId}`, { method: "DELETE" });
+        if (res.ok) {
+          const nextList = docsList.filter((x) => x.id !== docId);
+          setDocsList(nextList);
+          if (selectedDocId === docId) {
+            const nextId = nextList[0]?.id ?? null;
+            setSelectedDocId(nextId);
+            if (nextId) {
+              const docRes = await fetch(`/api/conversations/${conversationId}/docs/${nextId}`);
+              if (docRes.ok) {
+                const data = await docRes.json();
+                setDoc({
+                  content: data.content ?? "",
+                  undoStack: Array.isArray(data.undoStack) ? data.undoStack : [],
+                  redoStack: Array.isArray(data.redoStack) ? data.redoStack : [],
+                  lockHolder: data.lockHolder ?? null,
+                  updatedAt: data.updatedAt ?? null,
+                });
+              }
+            } else {
+              setDoc({ content: "", undoStack: [], redoStack: [], lockHolder: null, updatedAt: null });
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    },
+    [conversationId, docsList, selectedDocId]
+  );
+
+  useEffect(() => {
+    if (editingDocId) {
+      const t = setTimeout(() => renameDocInputRef.current?.focus(), 0);
+      return () => clearTimeout(t);
+    }
+  }, [editingDocId]);
 
   const getClampedWidth = useCallback((clientX: number) => {
     const el = containerRef.current;
@@ -445,6 +715,7 @@ export default function ChatPage() {
               Send a message to start. The agent can delegate to your agents and edit the working doc.
             </p>
           ) : (
+            <>
             <ul className="space-y-4">
               {messages.map((m) => (
                 <li
@@ -489,6 +760,8 @@ export default function ChatPage() {
                 </li>
               ))}
             </ul>
+            <div ref={chatBottomRef} aria-hidden="true" />
+            </>
           )}
         </div>
         <form
@@ -530,7 +803,91 @@ export default function ChatPage() {
         />
       )}
       <section className="flex min-w-0 flex-1 flex-col bg-zinc-50 dark:bg-zinc-950">
-        <div className="relative flex-1 overflow-hidden p-4">
+        <div className="flex flex-1 flex-col min-h-0">
+          {docsList.length > 0 && (
+            <div className="relative z-10 flex flex-shrink-0 items-center gap-0.5 border-b border-zinc-200 bg-white px-2 py-1 dark:border-zinc-800 dark:bg-zinc-900 [scrollbar-width:thin] overflow-x-auto">
+              {docsList.map((d) => (
+                <div key={d.id} className="flex items-center gap-0.5 rounded group">
+                  {editingDocId === d.id ? (
+                    <input
+                      ref={renameDocInputRef}
+                      type="text"
+                      value={editingDocTitle}
+                      onChange={(e) => setEditingDocTitle(e.target.value)}
+                      onBlur={() => saveRenameDoc(d.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveRenameDoc(d.id);
+                        if (e.key === "Escape") cancelRenameDoc();
+                      }}
+                      className="min-w-[80px] max-w-[160px] rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => switchDoc(d.id)}
+                        onDoubleClick={(e) => {
+                          e.preventDefault();
+                          startRenameDoc(d);
+                        }}
+                        className={`rounded px-3 py-1.5 text-sm font-medium whitespace-nowrap ${
+                          selectedDocId === d.id
+                            ? "bg-zinc-200 text-zinc-900 dark:bg-zinc-700 dark:text-zinc-100"
+                            : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                        }`}
+                        title="Double-click to rename"
+                      >
+                        {d.title}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteDoc(d.id);
+                        }}
+                        disabled={docsList.length <= 1}
+                        className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-400"
+                        aria-label="Delete doc"
+                        title={docsList.length <= 1 ? "Cannot delete the last doc" : "Delete doc"}
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={handleNewDoc}
+                className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+                title="New doc"
+                aria-label="New doc"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            </div>
+          )}
+          <div className="relative z-0 flex flex-1 flex-col min-h-0 overflow-hidden">
+          {stuckLocked && (
+            <div className="flex-shrink-0 flex items-center justify-between gap-2 rounded-t-lg border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm dark:border-amber-800 dark:bg-amber-900/30">
+              <span className="text-amber-800 dark:text-amber-200">
+                This doc is locked. Take control to edit.
+              </span>
+              <button
+                type="button"
+                onClick={handleTakeControl}
+                className="rounded bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600"
+              >
+                Take control
+              </button>
+            </div>
+          )}
+          <div className="flex-1 overflow-hidden p-4 min-h-0">
           {docLoading ? (
             <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading doc…</p>
           ) : (
@@ -541,6 +898,10 @@ export default function ChatPage() {
                 readOnly={docReadOnly}
                 placeholder="Shared doc. You and the agent can edit (not at the same time)."
                 className="h-full focus-within:ring-2 focus-within:ring-zinc-400 dark:focus-within:ring-zinc-600"
+                onPersistedUndo={handlePersistedUndo}
+                onPersistedRedo={handlePersistedRedo}
+                canPersistedUndo={doc.undoStack.length > 0}
+                canPersistedRedo={doc.redoStack.length > 0}
               />
               {agentEditing && (
                 <div
@@ -550,6 +911,8 @@ export default function ChatPage() {
               )}
             </>
           )}
+          </div>
+          </div>
         </div>
       </section>
     </div>

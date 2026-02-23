@@ -36,6 +36,7 @@ type MasterAgentRecord = {
   maxSteps?: number;
   thinkingEnabled?: boolean;
   toolIds?: string[];
+  subAgentIds?: string[];
 };
 
 type UnifiedItem =
@@ -99,6 +100,7 @@ function AgentsPageContent() {
   const [masterMaxSteps, setMasterMaxSteps] = useState(10);
   const [masterThinkingEnabled, setMasterThinkingEnabled] = useState(false);
   const [masterToolIds, setMasterToolIds] = useState<string[]>([]);
+  const [masterSubAgentIds, setMasterSubAgentIds] = useState<string[]>([]);
   const [masterKnowledgeGuidance, setMasterKnowledgeGuidance] = useState("");
   const [masterKnowledgeRules, setMasterKnowledgeRules] = useState("");
   const [masterKnowledgeStyle, setMasterKnowledgeStyle] = useState("");
@@ -323,6 +325,7 @@ function AgentsPageContent() {
             maxSteps: masterMaxSteps >= 1 && masterMaxSteps <= 100 ? masterMaxSteps : 10,
             thinkingEnabled: masterThinkingEnabled,
             toolIds: masterToolIds.length > 0 ? masterToolIds : undefined,
+            subAgentIds: masterSubAgentIds.length > 0 ? masterSubAgentIds : undefined,
           }),
         });
         if (!res.ok) {
@@ -355,6 +358,7 @@ function AgentsPageContent() {
         setMasterMaxSteps(10);
         setMasterThinkingEnabled(false);
         setMasterToolIds([]);
+        setMasterSubAgentIds([]);
         setMasterKnowledgeGuidance("");
         setMasterKnowledgeRules("");
         setMasterKnowledgeStyle("");
@@ -376,6 +380,7 @@ function AgentsPageContent() {
       masterMaxSteps,
       masterThinkingEnabled,
       masterToolIds,
+      masterSubAgentIds,
       masterKnowledgeGuidance,
       masterKnowledgeRules,
       masterKnowledgeStyle,
@@ -420,6 +425,7 @@ function AgentsPageContent() {
             maxSteps: typeof detail.maxSteps === "number" ? detail.maxSteps : 10,
             thinkingEnabled: Boolean(detail.thinkingEnabled),
             toolIds: Array.isArray(detail.toolIds) ? detail.toolIds : undefined,
+            subAgentIds: Array.isArray(detail.subAgentIds) ? detail.subAgentIds : undefined,
           }),
         });
         if (!res.ok) {
@@ -1035,6 +1041,22 @@ function AgentsPageContent() {
             <p className="text-sm text-zinc-500 dark:text-zinc-400">No tools yet. Create some in <Link href="/tools" className="underline">Tools</Link>.</p>
           )}
         </div>
+        <div className="mb-4">
+          <span className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Sub-agents</span>
+          <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">Agents this master can invoke. Only these will appear in its context. Leave empty to allow all agents.</p>
+          {agents.length > 0 ? (
+            <div className="flex flex-wrap gap-3">
+              {agents.map((agent) => (
+                <label key={agent.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 dark:border-zinc-600">
+                  <input type="checkbox" checked={masterSubAgentIds.includes(agent.id)} onChange={(e) => setMasterSubAgentIds((prev) => e.target.checked ? [...prev, agent.id] : prev.filter((id) => id !== agent.id))} className="h-4 w-4 rounded border-zinc-300 dark:border-zinc-600 dark:bg-zinc-800" />
+                  <span className="text-sm text-zinc-900 dark:text-zinc-100">{agent.name}</span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">No agents yet. Create sub-agents first, then assign them here.</p>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2">
           <button type="submit" disabled={submitting} className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200">
             {submitting ? "Creating…" : "Create master agent"}
@@ -1320,7 +1342,7 @@ function AgentsPageContent() {
                 />
               );
               const content = (
-                <Link href={`/master/${ma.id}`} className="block">
+                <>
                   <h3 className="font-medium text-zinc-900 dark:text-zinc-100">{ma.name}</h3>
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -1330,10 +1352,10 @@ function AgentsPageContent() {
                       Master agent
                     </span>
                   </div>
-                </Link>
+                </>
               );
               return (
-                <ResourceCard key={`master-${ma.id}`} menu={menu}>
+                <ResourceCard key={`master-${ma.id}`} menu={menu} onClick={() => router.push(`/master/${ma.id}`)}>
                   {content}
                 </ResourceCard>
               );
@@ -1380,7 +1402,7 @@ function AgentsPageContent() {
               </>
             );
             return (
-              <ResourceCard key={`agent-${a.id}`} menu={menu}>
+              <ResourceCard key={`agent-${a.id}`} menu={menu} onClick={() => startEdit(a)}>
                 {content}
               </ResourceCard>
             );
@@ -1405,9 +1427,9 @@ function AgentsPageContent() {
               );
               const content = (
                 <>
-                  <Link href={`/master/${ma.id}`} className="font-medium text-zinc-900 dark:text-zinc-100 hover:underline">
+                  <span className="font-medium text-zinc-900 dark:text-zinc-100">
                     {ma.name}
-                  </Link>
+                  </span>
                   <span className="text-sm text-zinc-500 dark:text-zinc-400">
                     {" "}
                     · {ma.model ?? "default"} · Updated {formatDate(ma.updatedAt)}
@@ -1418,7 +1440,7 @@ function AgentsPageContent() {
                 </>
               );
               return (
-                <ResourceRow key={`master-${ma.id}`} menu={menu}>
+                <ResourceRow key={`master-${ma.id}`} menu={menu} onClick={() => router.push(`/master/${ma.id}`)}>
                   {content}
                 </ResourceRow>
               );
@@ -1458,7 +1480,7 @@ function AgentsPageContent() {
               </>
             );
             return (
-              <ResourceRow key={`agent-${a.id}`} menu={menu}>
+              <ResourceRow key={`agent-${a.id}`} menu={menu} onClick={() => startEdit(a)}>
                 {content}
               </ResourceRow>
             );

@@ -17,15 +17,15 @@ export async function GET(
   if (!row) {
     return NextResponse.json({ error: "Master agent not found" }, { status: 404 });
   }
-  const toolIds: string[] = (() => {
-    if (!row.toolIds || typeof row.toolIds !== "string") return [];
+  const parseJsonIds = (raw: string | null): string[] => {
+    if (!raw || typeof raw !== "string") return [];
     try {
-      const arr = JSON.parse(row.toolIds);
+      const arr = JSON.parse(raw);
       return Array.isArray(arr) ? arr.filter((id: unknown): id is string => typeof id === "string") : [];
     } catch {
       return [];
     }
-  })();
+  };
   return NextResponse.json({
     id: row.id,
     name: row.name,
@@ -33,7 +33,8 @@ export async function GET(
     model: row.model,
     maxSteps: row.maxSteps,
     thinkingEnabled: row.thinkingEnabled,
-    toolIds,
+    toolIds: parseJsonIds(row.toolIds),
+    subAgentIds: parseJsonIds(row.subAgentIds),
     updatedAt: row.updatedAt?.toISOString?.() ?? row.updatedAt,
   });
 }
@@ -58,6 +59,7 @@ export async function PATCH(
     maxSteps?: number | null;
     thinkingEnabled?: boolean | null;
     toolIds?: string[];
+    subAgentIds?: string[];
   };
   try {
     body = await request.json();
@@ -73,6 +75,7 @@ export async function PATCH(
     maxSteps?: number;
     thinkingEnabled?: boolean;
     toolIds?: string | null;
+    subAgentIds?: string | null;
     updatedAt: Date;
   } = { updatedAt: new Date() };
 
@@ -103,6 +106,10 @@ export async function PATCH(
     const list = Array.isArray(body.toolIds) ? body.toolIds.filter((t): t is string => typeof t === "string") : [];
     updates.toolIds = list.length > 0 ? JSON.stringify(list) : null;
   }
+  if (body.subAgentIds !== undefined) {
+    const list = Array.isArray(body.subAgentIds) ? body.subAgentIds.filter((id): id is string => typeof id === "string") : [];
+    updates.subAgentIds = list.length > 0 ? JSON.stringify(list) : null;
+  }
 
   const { updatedAt, ...rest } = updates;
   await db
@@ -116,15 +123,15 @@ export async function PATCH(
   if (!updated) {
     return NextResponse.json({ error: "Master agent not found" }, { status: 404 });
   }
-  const toolIds: string[] = (() => {
-    if (!updated.toolIds || typeof updated.toolIds !== "string") return [];
+  const parseJsonIds = (raw: string | null): string[] => {
+    if (!raw || typeof raw !== "string") return [];
     try {
-      const arr = JSON.parse(updated.toolIds);
+      const arr = JSON.parse(raw);
       return Array.isArray(arr) ? arr.filter((id: unknown): id is string => typeof id === "string") : [];
     } catch {
       return [];
     }
-  })();
+  };
   return NextResponse.json({
     id: updated.id,
     name: updated.name,
@@ -132,7 +139,8 @@ export async function PATCH(
     model: updated.model,
     maxSteps: updated.maxSteps,
     thinkingEnabled: updated.thinkingEnabled,
-    toolIds,
+    toolIds: parseJsonIds(updated.toolIds),
+    subAgentIds: parseJsonIds(updated.subAgentIds),
     updatedAt: updated.updatedAt?.toISOString?.() ?? updated.updatedAt,
   });
 }

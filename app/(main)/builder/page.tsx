@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatPane } from "../components/ChatPane";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
@@ -76,6 +76,15 @@ function TestChatPane({ agentId }: { agentId: string }) {
   });
   const [input, setInput] = useState("");
   const isLoading = status === "submitted" || status === "streaming";
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const id = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [messages]);
 
   const handleSubmit = useCallback(
     (e?: React.FormEvent) => {
@@ -97,6 +106,7 @@ function TestChatPane({ agentId }: { agentId: string }) {
         {messages.length === 0 ? (
           <p className="text-sm text-zinc-500 dark:text-zinc-400">Send a message to test this agent.</p>
         ) : (
+          <>
           <ul className="space-y-4">
             {messages.map((m) => (
               <li
@@ -137,6 +147,8 @@ function TestChatPane({ agentId }: { agentId: string }) {
               </li>
             ))}
           </ul>
+          <div ref={bottomRef} aria-hidden="true" />
+          </>
         )}
       </div>
       <form onSubmit={handleSubmit} className="border-t border-zinc-200 p-4 dark:border-zinc-800 shrink-0">

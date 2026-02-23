@@ -21,11 +21,13 @@ type MasterAgentDetail = {
   maxSteps: number;
   thinkingEnabled: boolean;
   toolIds: string[];
+  subAgentIds: string[];
   updatedAt: string | null;
 };
 
 type ToolOption = { id: string; name: string };
 type FileOption = { id: string; filename: string };
+type AgentOption = { id: string; name: string };
 
 export default function MasterEditPage() {
   const params = useParams();
@@ -49,6 +51,8 @@ export default function MasterEditPage() {
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [toolIds, setToolIds] = useState<string[]>([]);
   const [availableTools, setAvailableTools] = useState<ToolOption[]>([]);
+  const [subAgentIds, setSubAgentIds] = useState<string[]>([]);
+  const [availableAgents, setAvailableAgents] = useState<AgentOption[]>([]);
 
   const fetchTools = useCallback(async () => {
     try {
@@ -86,6 +90,7 @@ export default function MasterEditPage() {
       );
       setThinkingEnabled(Boolean(data.thinkingEnabled));
       setToolIds(Array.isArray(data.toolIds) ? data.toolIds : []);
+      setSubAgentIds(Array.isArray(data.subAgentIds) ? data.subAgentIds : []);
       const [knowledgeRes, filesRes] = await Promise.all([
         fetch(`/api/knowledge?ownerType=master&ownerId=${encodeURIComponent(id)}`),
         fetch(`/api/master-agents/${id}/assigned-files`),
@@ -124,6 +129,22 @@ export default function MasterEditPage() {
     fetchTools();
   }, [fetchTools]);
 
+  const fetchAgents = useCallback(async () => {
+    try {
+      const res = await fetch("/api/agents");
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableAgents(Array.isArray(data) ? data.map((a: { id: string; name: string }) => ({ id: a.id, name: a.name })) : []);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAgents();
+  }, [fetchAgents]);
+
   const fetchFiles = useCallback(async () => {
     try {
       const res = await fetch("/api/files");
@@ -156,6 +177,7 @@ export default function MasterEditPage() {
             maxSteps: maxSteps >= 1 && maxSteps <= 100 ? maxSteps : 10,
             thinkingEnabled,
             toolIds,
+            subAgentIds,
           }),
         });
         if (!res.ok) {
@@ -198,7 +220,7 @@ export default function MasterEditPage() {
         setSubmitting(false);
       }
     },
-    [id, name, systemPrompt, knowledgeGuidance, knowledgeRules, knowledgeStyle, useDefaultGuidance, useDefaultRules, useDefaultStyle, selectedFileIds, model, maxSteps, thinkingEnabled, toolIds]
+    [id, name, systemPrompt, knowledgeGuidance, knowledgeRules, knowledgeStyle, useDefaultGuidance, useDefaultRules, useDefaultStyle, selectedFileIds, model, maxSteps, thinkingEnabled, toolIds, subAgentIds]
   );
 
   if (loading) {
@@ -444,6 +466,42 @@ export default function MasterEditPage() {
             </div>
           </div>
         )}
+        <div className="mb-6">
+          <label className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Sub-agents
+          </label>
+          <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+            Agents this master can invoke. Only these will appear in its context. Leave empty to allow all agents.
+          </p>
+          {availableAgents.length > 0 ? (
+            <div className="flex flex-wrap gap-3">
+              {availableAgents.map((agent) => (
+                <label
+                  key={agent.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 dark:border-zinc-600"
+                >
+                  <input
+                    type="checkbox"
+                    checked={subAgentIds.includes(agent.id)}
+                    onChange={(e) =>
+                      setSubAgentIds((prev) =>
+                        e.target.checked
+                          ? [...prev, agent.id]
+                          : prev.filter((id) => id !== agent.id)
+                      )
+                    }
+                    className="h-4 w-4 rounded border-zinc-300 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800"
+                  />
+                  <span className="text-sm text-zinc-900 dark:text-zinc-100">{agent.name}</span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-400">
+              No agents yet. Create sub-agents in <Link href="/agents" className="underline">Agents</Link>, then assign them here.
+            </p>
+          )}
+        </div>
         <div className="flex gap-3">
           <button
             type="submit"

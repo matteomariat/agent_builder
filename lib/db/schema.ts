@@ -30,6 +30,7 @@ export const masterAgents = sqliteTable("master_agents", {
   maxSteps: integer("max_steps"),
   thinkingEnabled: integer("thinking_enabled", { mode: "boolean" }),
   toolIds: text("tool_ids"), // JSON array of tool IDs
+  subAgentIds: text("sub_agent_ids"), // JSON array of agent IDs (sub-agents this master can invoke)
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });
 
@@ -103,8 +104,11 @@ export const messages = sqliteTable("messages", {
 
 export const workingDocs = sqliteTable("working_docs", {
   id: text("id").primaryKey(),
-  conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }).unique(),
+  conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default("Doc"),
   content: text("content").notNull().default(""),
+  undoStack: text("undo_stack").notNull().default("[]"), // JSON array of markdown strings
+  redoStack: text("redo_stack").notNull().default("[]"),
   lockHolder: text("lock_holder", { enum: ["user", "agent"] }),
   lockExpiresAt: integer("lock_expires_at", { mode: "timestamp" }),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),

@@ -11,6 +11,7 @@ export type CreateMasterBody = {
   maxSteps?: number | null;
   thinkingEnabled?: boolean | null;
   toolIds?: string[];
+  subAgentIds?: string[];
 };
 
 export type CreateSubagentBody = {
@@ -31,6 +32,7 @@ export type CreatedMasterAgent = {
   maxSteps: number | null;
   thinkingEnabled: boolean | null;
   toolIds: string[];
+  subAgentIds: string[];
   updatedAt: string | null;
 };
 
@@ -90,6 +92,10 @@ export async function createMasterAgent(
     Array.isArray(body.toolIds) && body.toolIds.length > 0
       ? JSON.stringify(body.toolIds.filter((t): t is string => typeof t === "string"))
       : null;
+  const subAgentIds =
+    Array.isArray(body.subAgentIds) && body.subAgentIds.length > 0
+      ? JSON.stringify(body.subAgentIds.filter((id): id is string => typeof id === "string"))
+      : null;
 
   const id = randomUUID();
   const now = new Date();
@@ -102,6 +108,7 @@ export async function createMasterAgent(
     maxSteps,
     thinkingEnabled,
     toolIds,
+    subAgentIds,
     updatedAt: now,
   });
 
@@ -119,6 +126,7 @@ export async function createMasterAgent(
     maxSteps: row.maxSteps,
     thinkingEnabled: row.thinkingEnabled,
     toolIds: parseToolIds(row.toolIds),
+    subAgentIds: parseToolIds(row.subAgentIds),
     updatedAt: row.updatedAt?.toISOString?.() ?? (row.updatedAt as unknown as string) ?? null,
   };
 }

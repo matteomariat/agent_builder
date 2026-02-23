@@ -23,6 +23,7 @@ export type MasterAgentConfig = {
   maxSteps: number;
   thinkingEnabled: boolean;
   toolIds: string[] | null;
+  subAgentIds: string[] | null;
   updatedAt: string | null;
 };
 
@@ -33,6 +34,7 @@ export function getDefaultMasterAgentConfig(): Omit<MasterAgentConfig, "id" | "n
     maxSteps: DEFAULT_MAX_STEPS,
     thinkingEnabled: false,
     toolIds: null,
+    subAgentIds: null,
     updatedAt: null,
   };
 }
@@ -65,10 +67,11 @@ export async function getConfigForConversation(conversationId: string): Promise<
       maxSteps: defaults.maxSteps,
       thinkingEnabled: defaults.thinkingEnabled,
       toolIds: null,
+      subAgentIds: null,
       updatedAt: null,
     };
   }
-  const parseToolIds = (raw: string | null): string[] => {
+  const parseJsonIds = (raw: string | null): string[] => {
     if (!raw || typeof raw !== "string") return [];
     try {
       const arr = JSON.parse(raw);
@@ -87,7 +90,8 @@ export async function getConfigForConversation(conversationId: string): Promise<
         model: row.model ?? DEFAULT_MODEL,
         maxSteps: row.maxSteps ?? DEFAULT_MAX_STEPS,
         thinkingEnabled: row.thinkingEnabled ?? false,
-        toolIds: parseToolIds(row.toolIds),
+        toolIds: parseJsonIds(row.toolIds),
+        subAgentIds: parseJsonIds(row.subAgentIds),
         updatedAt: row.updatedAt?.toISOString?.() ?? (row.updatedAt as unknown as string) ?? null,
       };
     }
@@ -104,7 +108,8 @@ export async function getConfigForConversation(conversationId: string): Promise<
       model: firstForUser.model ?? DEFAULT_MODEL,
       maxSteps: firstForUser.maxSteps ?? DEFAULT_MAX_STEPS,
       thinkingEnabled: firstForUser.thinkingEnabled ?? false,
-      toolIds: parseToolIds(firstForUser.toolIds),
+      toolIds: parseJsonIds(firstForUser.toolIds),
+      subAgentIds: parseJsonIds(firstForUser.subAgentIds),
       updatedAt: firstForUser.updatedAt?.toISOString?.() ?? (firstForUser.updatedAt as unknown as string) ?? null,
     };
   }
@@ -117,6 +122,7 @@ export async function getConfigForConversation(conversationId: string): Promise<
     maxSteps: defaults.maxSteps,
     thinkingEnabled: defaults.thinkingEnabled,
     toolIds: null,
+    subAgentIds: null,
     updatedAt: null,
   };
 }

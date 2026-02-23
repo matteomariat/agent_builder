@@ -98,6 +98,7 @@ export function ChatPane({
   const [input, setInput] = useState("");
   const isLoading = status === "submitted" || status === "streaming";
   const lastProcessedRef = useRef<string>("");
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   const handleSubmit = useCallback(
     (e?: React.FormEvent) => {
@@ -109,6 +110,14 @@ export function ChatPane({
     },
     [input, isLoading, sendMessage]
   );
+
+  useEffect(() => {
+    if (messages.length === 0 && !messagesLoaded) return;
+    const id = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [messages, messagesLoaded]);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -206,6 +215,7 @@ export function ChatPane({
         ) : messages.length === 0 ? (
           <p className="text-sm text-zinc-500 dark:text-zinc-400">{placeholder}</p>
         ) : (
+          <>
           <ul className="space-y-4">
             {messages.map((m) => (
               <li
@@ -250,6 +260,8 @@ export function ChatPane({
               </li>
             ))}
           </ul>
+          <div ref={bottomRef} aria-hidden="true" />
+          </>
         )}
       </div>
       <form onSubmit={handleSubmit} className="border-t border-zinc-200 p-4 dark:border-zinc-800 shrink-0">

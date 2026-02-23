@@ -13,6 +13,10 @@ type WorkingDocEditorProps = {
   placeholder?: string;
   className?: string;
   exportFileName?: string;
+  onPersistedUndo?: () => void;
+  onPersistedRedo?: () => void;
+  canPersistedUndo?: boolean;
+  canPersistedRedo?: boolean;
 };
 
 const TB = "rounded p-1.5 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 disabled:pointer-events-none dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-100";
@@ -34,6 +38,10 @@ export function WorkingDocEditor({
   placeholder = "Shared doc. You and the agent can edit (not at the same time).",
   className = "",
   exportFileName = "working-doc.md",
+  onPersistedUndo,
+  onPersistedRedo,
+  canPersistedUndo = false,
+  canPersistedRedo = false,
 }: WorkingDocEditorProps) {
   const lastEmittedRef = useRef<string>(value);
 
@@ -122,8 +130,11 @@ export function WorkingDocEditor({
           <button
             type="button"
             className={TB}
-            onClick={() => editor.chain().focus().undo().run()}
-            disabled={!editor.can().undo()}
+            onClick={() => {
+              if (canPersistedUndo && onPersistedUndo) onPersistedUndo();
+              else editor.chain().focus().undo().run();
+            }}
+            disabled={canPersistedUndo ? !canPersistedUndo : !editor.can().undo()}
             title="Undo"
             aria-label="Undo"
           >
@@ -134,8 +145,11 @@ export function WorkingDocEditor({
           <button
             type="button"
             className={TB}
-            onClick={() => editor.chain().focus().redo().run()}
-            disabled={!editor.can().redo()}
+            onClick={() => {
+              if (canPersistedRedo && onPersistedRedo) onPersistedRedo();
+              else editor.chain().focus().redo().run();
+            }}
+            disabled={canPersistedRedo ? !canPersistedRedo : !editor.can().redo()}
             title="Redo"
             aria-label="Redo"
           >

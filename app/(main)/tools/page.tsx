@@ -684,6 +684,7 @@ export default function ToolsPage() {
                 menu={menu}
                 editForm={editFormJsx(t)}
                 isEditing={isEditing}
+                onClick={() => startEdit(t)}
               >
                 {content}
               </ResourceCard>
@@ -723,6 +724,7 @@ export default function ToolsPage() {
                 menu={menu}
                 editForm={editFormJsx(t)}
                 isEditing={isEditing}
+                onClick={() => startEdit(t)}
               >
                 {content}
               </ResourceRow>

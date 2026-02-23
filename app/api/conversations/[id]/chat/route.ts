@@ -7,7 +7,7 @@ import { getBuilderConfig } from "@/lib/db/builder-config";
 import { buildToolSetFromToolIds } from "@/lib/agents/configured-tools";
 import { db } from "@/lib/db";
 import { conversations, messages, agents, workingDocs } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { getDefaultUserId } from "@/lib/db/users";
 import { getConfigForConversation } from "@/lib/db/master-agents";
 import { getMemoriesForMasterAgent } from "@/lib/db/master-agent-memories";
@@ -159,10 +159,20 @@ export async function POST(
       docRow = await getDocByConversationId(conversationId);
     }
     const docContent = docRow?.content ?? "";
-    const agentList = await db.query.agents.findMany({
-      where: eq(agents.userId, userId),
-      columns: { id: true, name: true, systemPrompt: true },
-    });
+    await setDocLock(conversationId, "agent");
+
+    const masterCfg = await getConfigForConversation(conversationId);
+    const masterAgentId = masterCfg.id || null;
+    const agentList =
+      masterAgentId && masterCfg.subAgentIds && masterCfg.subAgentIds.length > 0
+        ? await db.query.agents.findMany({
+            where: and(eq(agents.userId, userId), inArray(agents.id, masterCfg.subAgentIds)),
+            columns: { id: true, name: true, systemPrompt: true },
+          })
+        : await db.query.agents.findMany({
+            where: eq(agents.userId, userId),
+            columns: { id: true, name: true, systemPrompt: true },
+          });
     const oneLineDescription = (prompt: string | null) => {
       if (!prompt || !prompt.trim()) return "";
       const firstLine = prompt.trim().split(/\n/)[0]?.trim() ?? "";
@@ -173,10 +183,6 @@ export async function POST(
         ? `User-created agents (use invoke_agent with these IDs when the user's task matches the agent's expertise):\n${agentList.map((a) => `- ${a.name} (${a.id})${oneLineDescription(a.systemPrompt) ? ": " + oneLineDescription(a.systemPrompt) : ""}`).join("\n")}`
         : "No user-created agents yet.";
 
-    await setDocLock(conversationId, "agent");
-
-    const masterCfg = await getConfigForConversation(conversationId);
-    const masterAgentId = masterCfg.id || null;
     chatLog.info("chat.config", {
       masterAgentId,
       modelId: masterCfg.model ?? "gemini-2.5-flash",

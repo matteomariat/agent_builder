@@ -5,6 +5,7 @@ type ResourceCardProps = {
   menu?: React.ReactNode;
   editForm?: React.ReactNode;
   isEditing?: boolean;
+  onClick?: () => void;
 };
 
 export function ResourceCard({
@@ -12,9 +13,26 @@ export function ResourceCard({
   menu,
   editForm,
   isEditing = false,
+  onClick,
 }: ResourceCardProps) {
+  const isClickable = Boolean(onClick) && !isEditing;
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!isClickable || !onClick) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  };
+
   return (
-    <li className="relative flex flex-col rounded-xl border border-zinc-200 bg-white transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700 dark:hover:bg-zinc-800">
+    <li
+      className={`relative flex flex-col rounded-xl border border-zinc-200 bg-white transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700 dark:hover:bg-zinc-800 ${isClickable ? "cursor-pointer" : ""}`}
+      onClick={isClickable ? onClick : undefined}
+      onKeyDown={handleKeyDown}
+      role={isClickable ? "button" : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+    >
       {isEditing && editForm != null ? (
         <div className="p-4">{editForm}</div>
       ) : (

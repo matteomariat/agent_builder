@@ -3,7 +3,7 @@ import { ensureDefaultUser } from "@/lib/db/users";
 import { getMasterAgentsByUserId } from "@/lib/db/master-agents";
 import { createMasterAgent } from "@/lib/agents/create-agent";
 
-function parseToolIds(raw: string | null): string[] {
+function parseJsonIds(raw: string | null): string[] {
   if (!raw || typeof raw !== "string") return [];
   try {
     const arr = JSON.parse(raw);
@@ -24,7 +24,8 @@ export async function GET() {
       model: ma.model,
       maxSteps: ma.maxSteps,
       thinkingEnabled: ma.thinkingEnabled,
-      toolIds: parseToolIds(ma.toolIds),
+      toolIds: parseJsonIds(ma.toolIds),
+      subAgentIds: parseJsonIds(ma.subAgentIds),
       updatedAt: ma.updatedAt?.toISOString?.() ?? ma.updatedAt,
     }))
   );
@@ -39,6 +40,7 @@ export async function POST(request: NextRequest) {
     maxSteps?: number | null;
     thinkingEnabled?: boolean | null;
     toolIds?: string[];
+    subAgentIds?: string[];
   };
   try {
     body = await request.json();

@@ -684,6 +684,7 @@ export default function FilesPage() {
                 menu={menu}
                 editForm={renameFormJsx(f)}
                 isEditing={isRenaming}
+                onClick={() => (isEditable(f) ? openEdit(f) : openRename(f))}
               >
                 {content}
               </ResourceCard>
@@ -718,6 +719,7 @@ export default function FilesPage() {
                 menu={menu}
                 editForm={renameFormJsx(f)}
                 isEditing={isRenaming}
+                onClick={() => (isEditable(f) ? openEdit(f) : openRename(f))}
               >
                 {content}
               </ResourceRow>

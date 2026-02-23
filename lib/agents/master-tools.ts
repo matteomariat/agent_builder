@@ -1,7 +1,15 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { runUserAgent } from "./run-user-agent";
-import { appendOrReplaceDoc } from "@/lib/db/doc";
+import {
+  appendOrReplaceDoc,
+  listDocsByConversationId,
+  createDoc,
+  updateDocTitle,
+  deleteDoc,
+  getDocById,
+  getDefaultDocForConversation,
+} from "@/lib/db/doc";
 import { getMemoriesForMasterAgent, addMemory } from "@/lib/db/master-agent-memories";
 import { getAssignedFileIdsForMaster } from "@/lib/db/file-assignments";
 import { db } from "@/lib/db";
@@ -113,23 +121,106 @@ export function createMasterTools(conversationId: string, masterAgentId: string 
           };
         }),
     }),
+    list_docs: tool({
+      description: "List all docs in this conversation. Returns id and title for each. Use before create_doc or write_to_doc to target a specific doc.",
+      inputSchema: zodSchema(z.object({})),
+      execute: async () =>
+        withToolLog("list_docs", conversationId, {}, async () => {
+          const docs = await listDocsByConversationId(conversationId);
+          return {
+            docs: docs.map((d) => ({ id: d.id, title: d.title, updatedAt: d.updatedAt?.toISOString?.() ?? null })),
+            message: `Found ${docs.length} doc(s).`,
+          };
+        }),
+    }),
+    create_doc: tool({
+      description: "Create a new doc in this conversation. Optionally set title and initial content. Returns the new doc id and title.",
+      inputSchema: zodSchema(
+        z.object({
+          title: z.string().optional().describe("Doc title; defaults to 'Doc'"),
+          content: z.string().optional().describe("Initial markdown content"),
+        })
+      ),
+      execute: async ({ title, content }) =>
+        withToolLog("create_doc", conversationId, { title: title ?? "Doc" }, async () => {
+          const created = await createDoc(conversationId, { title, content });
+          if (!created) return { error: "Failed to create doc" };
+          return { id: created.id, title: created.title, message: `Created doc "${created.title}".` };
+        }),
+    }),
+    rename_doc: tool({
+      description: "Rename a doc by id. Use list_docs to get doc ids.",
+      inputSchema: zodSchema(
+        z.object({
+          docId: z.string().describe("Doc ID from list_docs"),
+          title: z.string().describe("New title for the doc"),
+        })
+      ),
+      execute: async ({ docId, title }) =>
+        withToolLog("rename_doc", conversationId, { docId, title }, async () => {
+          const out = await updateDocTitle(docId, conversationId, title);
+          if (!out) return { error: "Doc not found" };
+          return { id: out.id, title: out.title, message: `Renamed to "${out.title}".` };
+        }),
+    }),
+    delete_doc: tool({
+      description: "Delete a doc by id. Use list_docs to get doc ids. Cannot delete the last remaining doc.",
+      inputSchema: zodSchema(
+        z.object({
+          docId: z.string().describe("Doc ID from list_docs"),
+        })
+      ),
+      execute: async ({ docId }) =>
+        withToolLog("delete_doc", conversationId, { docId }, async () => {
+          const docs = await listDocsByConversationId(conversationId);
+          if (docs.length <= 1) return { error: "Cannot delete the last doc." };
+          const deleted = await deleteDoc(docId, conversationId);
+          if (!deleted) return { error: "Doc not found" };
+          return { ok: true, message: "Doc deleted." };
+        }),
+    }),
     write_to_doc: tool({
       description:
-        "Append or replace content in the working doc. Use 'append' to add new content at the end; use 'replace' to set the entire doc content. Only call when the user is not editing (doc is not locked by user).",
+        "Append or replace content in a working doc. Use docId to target a specific doc (from list_docs); omit for the default doc. Use 'append' to add at the end; use 'replace' to set full content. Only call when the user is not editing that doc.",
       inputSchema: zodSchema(
         z.object({
           mode: z.enum(["append", "replace"]).describe("append = add at end, replace = set full content"),
           content: z.string().describe("The text to append or the full doc content"),
+          docId: z.string().optional().describe("Doc ID from list_docs; omit to use the default doc"),
         })
       ),
-      execute: async ({ mode, content }) =>
-        withToolLog("write_to_doc", conversationId, { mode }, async () => {
-          const out = await appendOrReplaceDoc(conversationId, mode, content, true);
+      execute: async ({ mode, content, docId }) =>
+        withToolLog("write_to_doc", conversationId, { mode, docId }, async () => {
+          const out = await appendOrReplaceDoc(conversationId, mode, content, true, docId);
           if (out === null) return { error: "Working doc not found" };
           if ("conflict" in out && out.conflict) {
             return { error: "Doc is being edited by the user. Try again later." };
           }
           return { ok: true, message: mode === "append" ? "Appended to doc." : "Doc replaced." };
+        }),
+    }),
+    word_count: tool({
+      description:
+        "Return the exact word count for a doc. Use this instead of counting manually to avoid wasting tokens. Use list_docs to get doc ids; omit docId to use the default doc.",
+      inputSchema: zodSchema(
+        z.object({
+          docId: z.string().optional().describe("Doc ID from list_docs; omit to use the default doc"),
+        })
+      ),
+      execute: async ({ docId }) =>
+        withToolLog("word_count", conversationId, { docId }, async () => {
+          const doc = docId
+            ? await getDocById(docId, conversationId)
+            : await getDefaultDocForConversation(conversationId);
+          if (!doc) return { error: "Doc not found" };
+          const content = doc.content ?? "";
+          const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
+          return {
+            wordCount,
+            docId: doc.id,
+            title: doc.title,
+            message: `"${doc.title}" has ${wordCount} word(s).`,
+          };
         }),
     }),
     research: tool({
@@ -231,7 +322,7 @@ export function createMasterTools(conversationId: string, masterAgentId: string 
 
 export const MASTER_SYSTEM_PROMPT = `You are the Master agent. You coordinate work by:
 1. Delegating to user-created agents via the invoke_agent tool (pass agentId and message).
-2. Writing to the shared working doc via write_to_doc (append or replace). Only write when the user is not editing.
+2. Using the working docs: list_docs to see docs, create_doc to add a doc, rename_doc and delete_doc to rename or delete by id, write_to_doc (append or replace) to write; pass docId to target a specific doc. Only write when the user is not editing that doc. Cannot delete the last remaining doc. Use word_count to get the exact word count for a doc when needed (do not count manually—it wastes tokens).
 3. Using the research tool to search/summarize the user's uploaded files.
 
 Always be helpful and concise. When you delegate to another agent, use their result as follows:
